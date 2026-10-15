@@ -1,1 +1,323 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1">
+  <title>Gold AI Trader</title>
 
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: #0b1220;
+      color: white;
+      font-family: Arial, sans-serif;
+    }
+
+    header {
+      padding: 20px;
+      background: #111c2e;
+    }
+
+    h2 { margin: 0 0 8px; }
+
+    .subtitle { color: #94a3b8; }
+
+    .price {
+      font-size: 30px;
+      font-weight: bold;
+      margin-top: 15px;
+    }
+
+    .timeframes {
+      display: flex;
+      gap: 8px;
+      padding: 12px;
+    }
+
+    button {
+      flex: 1;
+      padding: 12px 4px;
+      background: #1e293b;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+
+    button.active {
+      background: #2563eb;
+    }
+
+    #chart {
+      width: 100%;
+      height: 380px;
+    }
+
+    .panel {
+      margin: 12px;
+      padding: 18px;
+      background: #111c2e;
+      border-radius: 12px;
+    }
+
+    .nav {
+      display: flex;
+      gap: 6px;
+      padding: 12px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <header>
+    <h2>🟡 Gold AI Trader</h2>
+    <div class="subtitle">XAUUSDT · BYBIT</div>
+    <div id="liveStatus" style="color:#f87171; margin-top:8px;">
+  🔴 OFFLINE
+</div>
+    <div class="price" id="price">Загрузка...</div>
+  </header>
+
+  <div class="timeframes">
+    <button class="active" onclick="changeTF('5', this)">M5</button>
+    <button onclick="changeTF('15', this)">M15</button>
+    <button onclick="changeTF('60', this)">H1</button>
+    <button onclick="changeTF('240', this)">H4</button>
+    <button onclick="changeTF('D', this)">D1</button>
+  </div>
+
+  <div id="chart"></div>
+
+  <div class="panel">
+    <h3>🧠 AI Анализ</h3>
+    <p>Автоанализ подключим следующим этапом.</p>
+  </div>
+
+  <div class="panel">
+    <h3>💰 Demo Balance</h3>
+    <h2>$1,000</h2>
+  </div>
+
+  <div class="nav">
+    <button>📈 График</button>
+    <button>🧠 Анализ</button>
+    <button>🔔 Сигналы</button>
+    <button>⚙️ Риск</button>
+  </div>
+
+  <script>
+    if (window.Telegram?.WebApp) {
+      Telegram.WebApp.ready();
+      Telegram.WebApp.expand();
+    }
+
+    const chart = LightweightCharts.createChart(
+      document.getElementById('chart'),
+      {
+        layout: {
+          background: { color: '#0b1220' },
+          textColor: '#94a3b8'
+        },
+        grid: {
+          vertLines: { color: '#1e293b' },
+          horzLines: { color: '#1e293b' }
+        },
+        timeScale: {
+          timeVisible: true,
+          secondsVisible: false
+        }
+      }
+    );
+
+    const candles = chart.addCandlestickSeries({
+      upColor: '#00c8a0',
+      downColor: '#ff4d61',
+      borderVisible: false,
+      wickUpColor: '#00c8a0',
+      wickDownColor: '#ff4d61'
+    });
+
+    const allowedIntervals = ['5', '15', '60', '240', 'D'];
+
+const savedInterval = localStorage.getItem('gold_timeframe');
+
+let interval = allowedIntervals.includes(savedInterval)
+  ? savedInterval
+  : '5';
+let socket = null;
+let reconnectTimer = null;
+let connectionId = 0;
+
+function connectLive() {
+  connectionId++;
+  const myConnection = connectionId;
+  const myInterval = interval;
+
+  clearTimeout(reconnectTimer);
+
+  if (socket) {
+    socket.close();
+    socket = null;
+  }
+
+  const ws = new WebSocket(
+    'wss://stream.bybit.com/v5/public/linear'
+  );
+
+  socket = ws;
+
+  ws.onopen = () => {
+    if (myConnection === connectionId) {
+      document.getElementById('liveStatus').textContent = '🟢 LIVE';
+      document.getElementById('liveStatus').style.color = '#22c55e';
+}
+    if (myConnection !== connectionId) {
+      ws.close();
+      return;
+    }
+
+    ws.send(JSON.stringify({
+      op: 'subscribe',
+      args: ['kline.' + myInterval + '.XAUUSDT']
+    }));
+
+    console.log('LIVE подключён:', myInterval);
+  };
+
+  ws.onmessage = event => {
+    if (myConnection !== connectionId) return;
+
+    try {
+      const message = JSON.parse(event.data);
+
+      if (message.topic !==
+          'kline.' + myInterval + '.XAUUSDT') {
+        return;
+      }
+
+      const item = message.data?.[0];
+      if (!item) return;
+
+      const candle = {
+        time: Math.floor(Number(item.start) / 1000),
+        open: Number(item.open),
+        high: Number(item.high),
+        low: Number(item.low),
+        close: Number(item.close)
+      };
+
+      candles.update(candle);
+
+      document.getElementById('price').textContent =
+        '$' + candle.close.toFixed(2);
+
+    } catch (error) {
+      console.error('WebSocket:', error);
+    }
+  };
+
+  ws.onclose = () => {
+    if (myConnection === connectionId) {
+  document.getElementById('liveStatus').textContent = '🔴 OFFLINE';
+  document.getElementById('liveStatus').style.color = '#f87171';
+}
+    if (myConnection !== connectionId) return;
+
+    console.log('LIVE отключён. Переподключение...');
+
+    reconnectTimer = setTimeout(() => {
+      if (myConnection === connectionId) {
+        connectLive();
+      }
+    }, 3000);
+  };
+
+  ws.onerror = error => {
+    console.error('Ошибка WebSocket:', error);
+    ws.close();
+  };
+}
+let chartRequestId = 0;
+    async function loadChart() {
+const requestId = ++chartRequestId;
+const requestedInterval = interval;
+      try {
+        const url =
+          'https://api.bybit.com/v5/market/kline' +
+          '?category=linear&symbol=XAUUSDT' +
+          '&interval=' + interval + '&limit=120';
+
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error('HTTP ' + response.status);
+        }
+
+        const json = await response.json();
+
+        if (json.retCode !== 0) {
+          throw new Error(json.retMsg);
+        }
+if (requestId !== chartRequestId ||
+    requestedInterval !== interval) {
+  return;
+}
+        const data = json.result.list.map(c => ({
+          time: Math.floor(Number(c[0]) / 1000),
+          open: Number(c[1]),
+          high: Number(c[2]),
+          low: Number(c[3]),
+          close: Number(c[4])
+        })).reverse();
+
+        candles.setData(data);
+
+        document.getElementById('price').textContent =
+          '$' + data[data.length - 1].close.toFixed(2);
+
+        chart.timeScale().fitContent();
+        connectLive();
+
+      } catch (error) {
+        console.error(error);
+        document.getElementById('price').textContent =
+          'Ошибка загрузки Bybit';
+      }
+    }
+
+    function changeTF(tf, button) {chartRequestId++;
+      connectionId++;
+clearTimeout(reconnectTimer);
+
+if (socket) {
+  socket.close();
+  socket = null;
+}
+      interval = tf;
+      localStorage.setItem('gold_timeframe', tf);
+
+      document.querySelectorAll('.timeframes button')
+        .forEach(b => b.classList.remove('active'));
+
+      button.classList.add('active');
+      loadChart();
+    }
+const timeframeButtons = document.querySelectorAll('.timeframes button');
+
+const timeframeIndex = allowedIntervals.indexOf(interval);
+
+timeframeButtons.forEach((button, index) => {
+  button.classList.toggle('active', index === timeframeIndex);
+});
+   loadChart();
+
+  </script>
+
+</body>
+</html>
